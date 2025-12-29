@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, FlatList } from "react-native";
+import React, { useMemo, useState } from "react";
+import { View, Text, Pressable, StyleSheet, FlatList, Alert } from "react-native";
+import * as Location from "expo-location";
 
 type Brother = {
   id: string;
@@ -10,6 +11,25 @@ type Brother = {
 
 export default function Home() {
   const [available, setAvailable] = useState(false);
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  const getLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Location needed", "We need your location to find brothers nearby.");
+        return;
+      }
+
+      const pos = await Location.getCurrentPositionAsync({});
+      setCoords({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+    } catch (e) {
+      Alert.alert("Error", "Could not get your location.");
+    }
+  };
 
   const brothers: Brother[] = useMemo(
     () => [
@@ -49,18 +69,25 @@ export default function Home() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingBottom: 24 }}
         renderItem={({ item }) => (
-          <Pressable style={styles.card}>
+          <View style={styles.card}>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{item.name}</Text>
               <Text style={styles.meta}>{item.distanceMins} min away</Text>
             </View>
-            <Text style={styles.invite}>Invite</Text>
-          </Pressable>
+
+            <Pressable onPress={getLocation}>
+              <Text style={styles.invite}>Invite</Text>
+            </Pressable>
+          </View>
         )}
-        ListEmptyComponent={
-          <Text style={styles.empty}>No brothers available right now.</Text>
-        }
+        ListEmptyComponent={<Text style={styles.empty}>No brothers available right now.</Text>}
       />
+
+      {coords && (
+        <Text style={styles.coords}>
+          Lat: {coords.latitude.toFixed(4)} | Lng: {coords.longitude.toFixed(4)}
+        </Text>
+      )}
     </View>
   );
 }
@@ -87,5 +114,6 @@ const styles = StyleSheet.create({
   meta: { color: "#d1fae5" },
   invite: { color: "#22c55e", fontWeight: "900" },
 
+  coords: { color: "#fff", marginTop: 10, textAlign: "center" },
   empty: { color: "#d1fae5", marginTop: 10 },
 });
