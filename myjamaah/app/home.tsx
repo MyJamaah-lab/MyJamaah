@@ -1,24 +1,115 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, FlatList, Alert } from "react-native";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 
-type Brother = {
+import { ensureSignedIn } from "./auth";
+import { db } from "./firebase";
+
+import {
+  collection,
+  doc,
+  getDocs,
+  limit,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+
+type FireUser = {
   id: string;
-  name: string;
-  status: "available" | "busy";
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
+  available?: boolean;
+  gender?: string;
 };
 
-type BrotherWithDistance = Brother & { km: number; minsWalk: number };
+type NearbyRow = {
+  id: string;
+  name: string;
+  km: number;
+  minsWalk: number;
+};
 
 export default function Home() {
+  const router = useRouter();
+
+  const [uid, setUid] = useState<string | null>(null);
   const [available, setAvailable] = useState(false);
   const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-const [radiusKm, setRadiusKm] = useState(3);
-const router = useRouter();
+  const [radiusKm, setRadiusKm] = useState(3);
 
+  const [remoteUsers, setRemoteUsers] = useState<FireUser[]>([]);
+
+  // ---- Firestore helpers ----
+
+  const upsertUser = async (userId: string) => {
+    await setDoc(
+      doc(db, "users", userId),
+      {
+        createdAt: serverTimestamp(),
+        lastSeenAt: serverTimestamp(),
+        gender: "male",
+      },
+      { merge: true }
+    );
+  };
+
+  const loadNearbyFromFirestore = async (currentUid: string | null) => {
+    try {
+      const q = query(
+        collection(db, "users"),
+        where("available", "==", true),
+        where("gender", "==", "male"),
+        limit(50)
+      );
+
+      const snap = await getDocs(q);
+      const users: FireUser[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .filter((u) => u.id !== currentUid);
+
+      setRemoteUsers(users);
+    } catch (e: any) {
+      Alert.alert("Error", `Could not load nearby users.\n${String(e?.message ?? e)}`);
+    }
+  };
+
+  const writeAvailability = async (value: boolean) => {
+    if (!uid) return;
+    try {
+      await updateDoc(doc(db, "users", uid), {
+        available: value,
+        lastSeenAt: serverTimestamp(),
+      });
+    } catch (e: any) {
+      Alert.alert("Write FAILED ❌", String(e?.message ?? e));
+    }
+  };
+
+  // ---- Auth on mount ----
+  useEffect(() => {
+    ensureSignedIn()
+      .then(async (user) => {
+        setUid(user.uid);
+        await upsertUser(user.uid);
+        // Load initial nearby list (may be empty until location is saved)
+        await loadNearbyFromFirestore(user.uid);
+      })
+      .catch((e) => Alert.alert("Auth error", String((e as any)?.message ?? e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Whenever availability changes, sync to Firestore ----
+  useEffect(() => {
+    if (!uid) return;
+    writeAvailability(available);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [available, uid]);
+
+  // ---- Location ----
   const getLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -28,13 +119,26 @@ const router = useRouter();
       }
 
       const pos = await Location.getCurrentPositionAsync({});
-      setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-    } catch {
-      Alert.alert("Error", "Could not get your location.");
+      const nextCoords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      setCoords(nextCoords);
+
+      if (uid) {
+        await updateDoc(doc(db, "users", uid), {
+          lat: nextCoords.latitude,
+          lng: nextCoords.longitude,
+          available,
+          lastSeenAt: serverTimestamp(),
+        });
+      }
+
+      // Refresh list after saving your location
+      await loadNearbyFromFirestore(uid);
+    } catch (e: any) {
+      Alert.alert("Error", String(e?.message ?? e));
     }
   };
 
-  // Simple haversine distance (km)
+  // ---- Distance ----
   const distanceKm = (aLat: number, aLng: number, bLat: number, bLng: number) => {
     const toRad = (v: number) => (v * Math.PI) / 180;
     const R = 6371;
@@ -51,70 +155,82 @@ const router = useRouter();
     return R * c;
   };
 
-  // Mock brothers (replace later with real users from Firebase)
-  const brothers: Brother[] = useMemo(
-    () => [
-      { id: "1", name: "Abdullah", status: "available", lat: 51.5079, lng: -0.0877 },
-      { id: "2", name: "Yusuf", status: "available", lat: 51.5055, lng: -0.0754 },
-      { id: "3", name: "Bilal", status: "busy", lat: 51.5097, lng: -0.0950 },
-      { id: "4", name: "Ibrahim", status: "available", lat: 51.5033, lng: -0.1196 },
-    ],
-    []
-  );
-
-  const nearby: BrotherWithDistance[] = useMemo(() => {
+  const nearby: NearbyRow[] = useMemo(() => {
     if (!coords) return [];
 
-    return brothers
-      .filter((b) => b.status === "available")
-      .map((b) => {
-        const km = distanceKm(coords.latitude, coords.longitude, b.lat, b.lng);
-        const minsWalk = Math.max(1, Math.round((km / 4.8) * 60)); // ~4.8km/h walking
-        return { ...b, km, minsWalk };
+    return remoteUsers
+      .filter((u) => typeof u.lat === "number" && typeof u.lng === "number")
+      .map((u) => {
+        const km = distanceKm(coords.latitude, coords.longitude, u.lat!, u.lng!);
+        const minsWalk = Math.max(1, Math.round((km / 4.8) * 60));
+        return { id: u.id, name: `Brother ${u.id.slice(0, 4)}`, km, minsWalk };
       })
-     .filter((b) => b.km <= radiusKm)
+      .filter((u) => u.km <= radiusKm)
       .sort((a, b) => a.km - b.km);
-  }, [coords, brothers]);
+  }, [coords, remoteUsers, radiusKm]);
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>MyJamaah</Text>
-      <Pressable style={styles.smallBtn} onPress={() => router.push("/requests")}>
-  <Text style={styles.smallBtnText}>View Requests</Text>
-</Pressable>
 
+      <Text style={{ color: "#d1fae5", marginBottom: 6 }}>
+        User ID: {uid ? uid.slice(0, 8) : "Signing in..."}
+      </Text>
+
+      <Text selectable style={{ color: "#d1fae5", marginBottom: 6 }}>
+        Full UID: {uid ?? "none"}
+      </Text>
+
+      <Text style={{ color: "#fff", marginBottom: 10 }}>Local available: {String(available)}</Text>
+
+      <Pressable style={styles.smallBtn} onPress={() => router.push("/requests")}>
+        <Text style={styles.smallBtnText}>View Requests</Text>
+      </Pressable>
 
       <Text style={styles.status}>
         Your status: {available ? "Available to pray" : "Not available"}
       </Text>
 
-      <Pressable
-        style={[styles.toggle, available && styles.toggleOn]}
-        onPress={() => setAvailable((v) => !v)}
-      >
+      <Pressable style={[styles.toggle, available && styles.toggleOn]} onPress={() => setAvailable((v) => !v)}>
         <Text style={styles.toggleText}>
           {available ? "Set as unavailable" : "I’m available to pray now"}
         </Text>
       </Pressable>
 
-      <Pressable style={styles.locationBtn} onPress={getLocation}>
-        <Text style={styles.locationBtnText}>
-          {coords ? "Update my location" : "Get my location"}
-        </Text>
+      {/* Debug button: keep for now until availability flipping is confirmed */}
+      <Pressable
+        style={styles.locationBtn}
+        onPress={async () => {
+          if (!uid) return Alert.alert("No uid yet");
+          try {
+            await updateDoc(doc(db, "users", uid), {
+              available,
+              lastSeenAt: serverTimestamp(),
+            });
+            Alert.alert("Write OK ✅", `Wrote available=${String(available)}`);
+          } catch (e: any) {
+            Alert.alert("Write FAILED ❌", String(e?.message ?? e));
+          }
+        }}
+      >
+        <Text style={styles.locationBtnText}>Force write availability</Text>
       </Pressable>
-<View style={styles.radiusRow}>
-  {[1, 3, 5, 10, 50].map((r) => (
-    <Pressable
-      key={r}
-      onPress={() => setRadiusKm(r)}
-      style={[styles.radiusPill, radiusKm === r && styles.radiusPillActive]}
-    >
-      <Text style={[styles.radiusText, radiusKm === r && styles.radiusTextActive]}>
-        {r}km
-      </Text>
-    </Pressable>
-  ))}
-</View>
+
+      <Pressable style={styles.locationBtn} onPress={getLocation}>
+        <Text style={styles.locationBtnText}>{coords ? "Update my location" : "Get my location"}</Text>
+      </Pressable>
+
+      <View style={styles.radiusRow}>
+        {[1, 3, 5, 10, 50].map((r) => (
+          <Pressable
+            key={r}
+            onPress={() => setRadiusKm(r)}
+            style={[styles.radiusPill, radiusKm === r && styles.radiusPillActive]}
+          >
+            <Text style={[styles.radiusText, radiusKm === r && styles.radiusTextActive]}>{r}km</Text>
+          </Pressable>
+        ))}
+      </View>
 
       {coords && (
         <Text style={styles.coords}>
@@ -140,12 +256,13 @@ const router = useRouter();
             <Pressable onPress={() => router.push({ pathname: "/invite", params: { name: item.name } })}>
               <Text style={styles.invite}>Invite</Text>
             </Pressable>
-
           </View>
         )}
         ListEmptyComponent={
           <Text style={styles.empty}>
-            {coords ? `No available brothers within ${radiusKm}km.` : "Tap “Get my location” to see nearby brothers."}
+            {coords
+              ? `No available brothers within ${radiusKm}km.`
+              : "Tap “Get my location” to see nearby brothers."}
           </Text>
         }
       />
@@ -156,25 +273,36 @@ const router = useRouter();
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 24, paddingHorizontal: 16, backgroundColor: "#022c22" },
   title: { fontSize: 28, fontWeight: "800", color: "#fff", marginBottom: 8 },
-  status: { color: "#d1fae5", marginBottom: 12 },
-smallBtn: {
-  alignSelf: "flex-start",
-  marginBottom: 10,
-  paddingVertical: 8,
-  paddingHorizontal: 12,
-  borderRadius: 999,
-  backgroundColor: "#083b2f",
-},
-smallBtnText: {
-  color: "#a7f3d0",
-  fontWeight: "900",
-},
 
-  toggle: { backgroundColor: "#16a34a", paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, marginBottom: 12 },
+  status: { color: "#d1fae5", marginBottom: 12 },
+
+  smallBtn: {
+    alignSelf: "flex-start",
+    marginBottom: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: "#083b2f",
+  },
+  smallBtnText: { color: "#a7f3d0", fontWeight: "900" },
+
+  toggle: {
+    backgroundColor: "#16a34a",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
   toggleOn: { backgroundColor: "#065f46" },
   toggleText: { color: "#fff", fontWeight: "700", textAlign: "center" },
 
-  locationBtn: { backgroundColor: "#0ea5e9", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, marginBottom: 8 },
+  locationBtn: {
+    backgroundColor: "#0ea5e9",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
   locationBtnText: { color: "#052e23", fontWeight: "900", textAlign: "center" },
 
   radiusRow: {
@@ -191,16 +319,9 @@ smallBtnText: {
     paddingHorizontal: 12,
     borderRadius: 999,
   },
-  radiusPillActive: {
-    backgroundColor: "#a7f3d0",
-  },
-  radiusText: {
-    color: "#a7f3d0",
-    fontWeight: "800",
-  },
-  radiusTextActive: {
-    color: "#052e23",
-  },
+  radiusPillActive: { backgroundColor: "#a7f3d0" },
+  radiusText: { color: "#a7f3d0", fontWeight: "800" },
+  radiusTextActive: { color: "#052e23" },
 
   coords: { color: "#a7f3d0", marginBottom: 10, textAlign: "center" },
 

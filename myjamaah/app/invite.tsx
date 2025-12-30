@@ -23,13 +23,13 @@ export default function Invite() {
 
   const canSend = place && mins;
 
-  const sendInvite = () => {
+  const sendInvite = async () => {
     if (!canSend) return;
 
     const placeLabel =
   place === "work" ? "Workplace" : place === "mosque" ? "Nearest mosque" : "Outdoor spot";
 
-addInvite({
+await addInvite({
   id: String(Date.now()),
   toName: name ?? "brother",
   place: place as InvitePlace,
@@ -37,6 +37,7 @@ addInvite({
   createdAt: Date.now(),
   status: "sent",
 });
+
 
 Alert.alert("Invite saved ✅", `Saved invite to ${name ?? "brother"} • ${placeLabel} • ${mins}m`);
 router.back();
