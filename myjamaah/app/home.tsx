@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 
 import { ensureSignedIn } from "./auth";
 import { db } from "./firebase";
+import { onSnapshot } from "firebase/firestore";
 
 import {
   collection,
@@ -24,14 +25,22 @@ type FireUser = {
   lng?: number;
   available?: boolean;
   gender?: string;
+
+  // allow both versions (Firestore is case-sensitive)
+  lastSeenAt?: any;
+  LastSeenAt?: any;
 };
+
 
 type NearbyRow = {
   id: string;
   name: string;
   km: number;
   minsWalk: number;
+  lastSeenText: string;
+  minsAgo: number;
 };
+
 
 export default function Home() {
   const router = useRouter();
@@ -40,6 +49,8 @@ export default function Home() {
   const [available, setAvailable] = useState(false);
   const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [radiusKm, setRadiusKm] = useState(3);
+  const ACTIVE_WITHIN_MINS = 15; // only show users seen in last 15 minutes
+
 
   const [remoteUsers, setRemoteUsers] = useState<FireUser[]>([]);
 
@@ -57,25 +68,29 @@ export default function Home() {
     );
   };
 
-  const loadNearbyFromFirestore = async (currentUid: string | null) => {
-    try {
-      const q = query(
-        collection(db, "users"),
-        where("available", "==", true),
-        where("gender", "==", "male"),
-        limit(50)
-      );
+  const subscribeNearbyFromFirestore = (currentUid: string | null) => {
+  const q = query(
+    collection(db, "users"),
+    where("available", "==", true),
+    where("gender", "==", "male"),
+    limit(50)
+  );
 
-      const snap = await getDocs(q);
+  return onSnapshot(
+    q,
+    (snap) => {
       const users: FireUser[] = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as any) }))
         .filter((u) => u.id !== currentUid);
 
       setRemoteUsers(users);
-    } catch (e: any) {
-      Alert.alert("Error", `Could not load nearby users.\n${String(e?.message ?? e)}`);
+    },
+    (err) => {
+      Alert.alert("Realtime error", String((err as any)?.message ?? err));
     }
-  };
+  );
+};
+
 
   const writeAvailability = async (value: boolean) => {
     if (!uid) return;
@@ -91,16 +106,22 @@ export default function Home() {
 
   // ---- Auth on mount ----
   useEffect(() => {
-    ensureSignedIn()
-      .then(async (user) => {
-        setUid(user.uid);
-        await upsertUser(user.uid);
-        // Load initial nearby list (may be empty until location is saved)
-        await loadNearbyFromFirestore(user.uid);
-      })
-      .catch((e) => Alert.alert("Auth error", String((e as any)?.message ?? e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  let unsubscribe: (() => void) | null = null;
+
+  ensureSignedIn()
+    .then(async (user) => {
+      setUid(user.uid);
+      await upsertUser(user.uid);
+      unsubscribe = subscribeNearbyFromFirestore(user.uid);
+    })
+    .catch((e) => Alert.alert("Auth error", String((e as any)?.message ?? e)));
+
+  return () => {
+    if (unsubscribe) unsubscribe();
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   // ---- Whenever availability changes, sync to Firestore ----
   useEffect(() => {
@@ -123,16 +144,18 @@ export default function Home() {
       setCoords(nextCoords);
 
       if (uid) {
-        await updateDoc(doc(db, "users", uid), {
-          lat: nextCoords.latitude,
-          lng: nextCoords.longitude,
-          available,
-          lastSeenAt: serverTimestamp(),
-        });
+        const round = (n: number) => Math.round(n * 200) / 200; // ~0.005 deg ≈ 300–500m in UK
+
+await updateDoc(doc(db, "users", uid), {
+  lat: round(nextCoords.latitude),
+  lng: round(nextCoords.longitude),
+  available,
+  lastSeenAt: serverTimestamp(),
+});
+
       }
 
       // Refresh list after saving your location
-      await loadNearbyFromFirestore(uid);
     } catch (e: any) {
       Alert.alert("Error", String(e?.message ?? e));
     }
@@ -155,19 +178,62 @@ export default function Home() {
     return R * c;
   };
 
-  const nearby: NearbyRow[] = useMemo(() => {
-    if (!coords) return [];
+const nearby: NearbyRow[] = useMemo(() => {
+  if (!coords) return [];
 
-    return remoteUsers
-      .filter((u) => typeof u.lat === "number" && typeof u.lng === "number")
-      .map((u) => {
-        const km = distanceKm(coords.latitude, coords.longitude, u.lat!, u.lng!);
-        const minsWalk = Math.max(1, Math.round((km / 4.8) * 60));
-        return { id: u.id, name: `Brother ${u.id.slice(0, 4)}`, km, minsWalk };
-      })
-      .filter((u) => u.km <= radiusKm)
-      .sort((a, b) => a.km - b.km);
-  }, [coords, remoteUsers, radiusKm]);
+  return remoteUsers
+    .filter((u) => typeof u.lat === "number" && typeof u.lng === "number")
+    .map((u) => {
+      const km = distanceKm(coords.latitude, coords.longitude, u.lat!, u.lng!);
+      const minsWalk = Math.max(1, Math.round((km / 4.8) * 60));
+
+      // ---- last seen logic ----
+let lastSeenText = "Active status unknown";
+let minsAgo: number | null = null;
+
+if (u.lastSeenAt) {
+  const ms =
+    typeof u.lastSeenAt?.toMillis === "function"
+      ? u.lastSeenAt.toMillis()
+      : typeof u.lastSeenAt === "number"
+      ? u.lastSeenAt
+      : Date.now();
+
+  minsAgo = Math.floor((Date.now() - ms) / 60000);
+  lastSeenText = minsAgo <= 2 ? "Active now" : `${minsAgo}m ago`;
+}
+
+// support both field names
+const rawLastSeen = u.lastSeenAt ?? u.LastSeenAt;
+
+if (rawLastSeen) {
+  const ms =
+    typeof rawLastSeen?.toMillis === "function"
+      ? rawLastSeen.toMillis()
+      : typeof rawLastSeen === "number"
+      ? rawLastSeen
+      : Date.now();
+
+  const minsAgo = Math.floor((Date.now() - ms) / 60000);
+  lastSeenText = minsAgo <= 2 ? "Active now" : `${minsAgo}m ago`;
+}
+
+
+      return {
+  id: u.id,
+  name: `Brother ${u.id.slice(0, 4)}`,
+  km,
+  minsWalk,
+  lastSeenText,
+  minsAgo: minsAgo ?? 9999,
+};
+
+    })
+    .filter((u) => u.km <= radiusKm)
+    .filter((u) => u.minsAgo <= ACTIVE_WITHIN_MINS)
+    .sort((a, b) => a.km - b.km);
+}, [coords, remoteUsers, radiusKm]);
+
 
   return (
     <View style={styles.container}>
@@ -240,32 +306,50 @@ export default function Home() {
 
       <Text style={styles.sectionTitle}>Nearby brothers (within {radiusKm}km)</Text>
 
-      <FlatList
-        data={nearby}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: 24 }}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.name}>{item.name}</Text>
-              <Text style={styles.meta}>
-                {item.km.toFixed(2)} km • ~{item.minsWalk} min walk
-              </Text>
-            </View>
+     <FlatList
+  data={nearby}
+  keyExtractor={(item) => item.id}
+  contentContainerStyle={{ paddingBottom: 24 }}
+  renderItem={({ item }) => (
+    <View style={styles.card}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.name}>{item.name}</Text>
 
-            <Pressable onPress={() => router.push({ pathname: "/invite", params: { name: item.name } })}>
-              <Text style={styles.invite}>Invite</Text>
-            </Pressable>
-          </View>
-        )}
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            {coords
-              ? `No available brothers within ${radiusKm}km.`
-              : "Tap “Get my location” to see nearby brothers."}
-          </Text>
+        <Text style={styles.meta}>
+          {item.km.toFixed(2)} km • ~{item.minsWalk} min walk
+        </Text>
+
+        {/* This MUST show even if timestamp is missing */}
+        <Text
+  style={[
+    styles.lastSeen,
+    item.lastSeenText === "Active now" && styles.activeNow,
+  ]}
+>
+  {item.lastSeenText === "Active now"
+    ? "🟢 Active now"
+    : `⏱ ${item.lastSeenText || "Active status unknown"}`}
+</Text>
+
+      </View>
+
+      <Pressable
+        onPress={() =>
+          router.push({ pathname: "/invite", params: { name: item.name } })
         }
-      />
+      >
+        <Text style={styles.invite}>Invite</Text>
+      </Pressable>
+    </View>
+  )}
+  ListEmptyComponent={
+    <Text style={styles.empty}>
+      {coords
+        ? `No available brothers within ${radiusKm}km.`
+        : "Tap “Get my location” to see nearby brothers."}
+    </Text>
+  }
+/>
     </View>
   );
 }
@@ -273,6 +357,9 @@ export default function Home() {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 24, paddingHorizontal: 16, backgroundColor: "#022c22" },
   title: { fontSize: 28, fontWeight: "800", color: "#fff", marginBottom: 8 },
+activeNow: {
+  color: "#34d399",
+},
 
   status: { color: "#d1fae5", marginBottom: 12 },
 
@@ -337,7 +424,13 @@ const styles = StyleSheet.create({
   },
   name: { color: "#fff", fontSize: 16, fontWeight: "800", marginBottom: 2 },
   meta: { color: "#d1fae5" },
+  lastSeen: {
+  color: "#ffffff",
+  fontWeight: "900",
+  marginTop: 6,
+},
   invite: { color: "#22c55e", fontWeight: "900" },
 
   empty: { color: "#d1fae5", marginTop: 10 },
 });
+
