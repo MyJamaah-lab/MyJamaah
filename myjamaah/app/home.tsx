@@ -6,6 +6,8 @@ import { useRouter } from "expo-router";
 import { ensureSignedIn } from "./auth";
 import { db } from "./firebase";
 import { onSnapshot } from "firebase/firestore";
+import { sendInviteToFirestore } from "./invitesApi";
+import { auth } from "./firebase";
 
 import {
   collection,
@@ -252,6 +254,29 @@ if (rawLastSeen) {
       <Pressable style={styles.smallBtn} onPress={() => router.push("/requests")}>
         <Text style={styles.smallBtnText}>View Requests</Text>
       </Pressable>
+<Pressable style={styles.smallBtn} onPress={() => router.push("/inbox")}>
+  <Text style={styles.smallBtnText}>Inbox</Text>
+</Pressable>
+<Pressable
+  style={styles.smallBtn}
+  onPress={async () => {
+    const me = auth.currentUser?.uid;
+    if (!me) return Alert.alert("Not signed in yet");
+
+    await sendInviteToFirestore({
+      fromUid: me,
+      fromName: "Me (test)",
+      toUid: me,
+      toName: "Me (test)",
+      place: "Workplace",
+      mins: 5,
+    });
+
+    Alert.alert("Test invite sent", "Check Inbox now.");
+  }}
+>
+  <Text style={styles.smallBtnText}>Send test invite to me</Text>
+</Pressable>
 
       <Text style={styles.status}>
         Your status: {available ? "Available to pray" : "Not available"}
@@ -335,7 +360,7 @@ if (rawLastSeen) {
 
       <Pressable
         onPress={() =>
-          router.push({ pathname: "/invite", params: { name: item.name } })
+          router.push({ pathname: "/invite", params: { name: item.name, toUid: item.id } })
         }
       >
         <Text style={styles.invite}>Invite</Text>

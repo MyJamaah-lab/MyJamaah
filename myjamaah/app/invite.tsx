@@ -2,10 +2,12 @@ import React, { useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { addInvite, InvitePlace } from "./store";
+import { sendInviteToFirestore } from "./invitesApi";
+import { auth } from "./firebase";
 
 export default function Invite() {
   const router = useRouter();
-  const { name } = useLocalSearchParams<{ name?: string }>();
+  const { name, toUid } = useLocalSearchParams<{ name?: string; toUid?: string }>();
 
   const [place, setPlace] = useState<"work" | "mosque" | "outdoor" | null>(null);
   const [mins, setMins] = useState<number | null>(null);
@@ -24,29 +26,57 @@ export default function Invite() {
   const canSend = place && mins;
 
   const sendInvite = async () => {
-    if (!canSend) return;
+  if (!canSend) return;
 
-    const placeLabel =
-  place === "work" ? "Workplace" : place === "mosque" ? "Nearest mosque" : "Outdoor spot";
+  const placeLabel =
+    place === "work" ? "Workplace" : place === "mosque" ? "Nearest mosque" : "Outdoor spot";
 
-await addInvite({
-  id: String(Date.now()),
-  toName: name ?? "brother",
-  place: place as InvitePlace,
-  mins: mins as number,
-  createdAt: Date.now(),
-  status: "sent",
-});
+  // 1) Save locally (your existing store)
+  addInvite({
+    id: String(Date.now()),
+    toName: name ?? "brother",
+    place: place as InvitePlace,
+    mins: mins as number,
+    createdAt: Date.now(),
+    status: "sent",
+  });
+
+  // 2) Save to Firestore (recipient inbox)
+  const fromUid = auth.currentUser?.uid;
+
+if (!fromUid) {
+  Alert.alert("Debug", "fromUid is missing (not signed in on this screen).");
+} else if (!toUid) {
+  Alert.alert("Debug", "toUid is missing.");
+} else {
+  try {
+    await sendInviteToFirestore({
+      fromUid,
+      fromName: "You",
+      toUid,
+      toName: name ?? "brother",
+      place: placeLabel,
+      mins: mins as number,
+    });
+
+    Alert.alert("Firestore ✅", `Invite written to users/${toUid}/invites`);
+  } catch (e: any) {
+    Alert.alert("Firestore ❌", String(e?.message ?? e));
+  }
+}
 
 
-Alert.alert("Invite saved ✅", `Saved invite to ${name ?? "brother"} • ${placeLabel} • ${mins}m`);
-router.back();
+  Alert.alert("Invite saved ✅", `Saved invite to ${name ?? "brother"} • ${placeLabel} • ${mins}m`);
+  router.back();
+};
 
-  };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Invite {name ?? "brother"}</Text>
+      <Text style={{ color: "#d1fae5", marginBottom: 12 }}>
+  toUid: {toUid ?? "NONE"}
+</Text>
       <Text style={styles.subtitle}>Choose a place and time.</Text>
 
       <Text style={styles.section}>Place</Text>
