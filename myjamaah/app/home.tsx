@@ -257,25 +257,8 @@ if (rawLastSeen) {
 <Pressable style={styles.smallBtn} onPress={() => router.push("/inbox")}>
   <Text style={styles.smallBtnText}>Inbox</Text>
 </Pressable>
-<Pressable
-  style={styles.smallBtn}
-  onPress={async () => {
-    const me = auth.currentUser?.uid;
-    if (!me) return Alert.alert("Not signed in yet");
-
-    await sendInviteToFirestore({
-      fromUid: me,
-      fromName: "Me (test)",
-      toUid: me,
-      toName: "Me (test)",
-      place: "Workplace",
-      mins: 5,
-    });
-
-    Alert.alert("Test invite sent", "Check Inbox now.");
-  }}
->
-  <Text style={styles.smallBtnText}>Send test invite to me</Text>
+<Pressable style={styles.smallBtn} onPress={() => router.push("/sent")}>
+  <Text style={styles.smallBtnText}>Sent</Text>
 </Pressable>
 
       <Text style={styles.status}>
