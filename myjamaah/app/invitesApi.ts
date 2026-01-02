@@ -1,5 +1,10 @@
 import { db } from "./firebase";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  setDoc,
+  serverTimestamp,
+  collection,
+} from "firebase/firestore";
 
 export type InviteDoc = {
   fromUid: string;
@@ -12,13 +17,33 @@ export type InviteDoc = {
   status: "sent" | "accepted" | "declined";
 };
 
-export async function sendInviteToFirestore(invite: Omit<InviteDoc, "createdAt" | "status">) {
-  // Each user has an inbox: users/{uid}/invites
-  const inbox = collection(db, "users", invite.toUid, "invites");
+export async function sendInviteToFirestore(
+  invite: Omit<InviteDoc, "createdAt" | "status">
+) {
+  // Create ONE shared inviteId so sender + receiver reference the same invite
+  const inviteId = doc(collection(db, "users", invite.toUid, "invites")).id;
 
-  await addDoc(inbox, {
+  // 1) Receiver inbox: users/{toUid}/invites/{inviteId}
+  await setDoc(doc(db, "users", invite.toUid, "invites", inviteId), {
     ...invite,
     createdAt: serverTimestamp(),
     status: "sent",
   });
+
+  // 2) Sender "sent" box: users/{fromUid}/sentInvites/{inviteId}
+  await setDoc(
+    doc(db, "users", invite.fromUid, "sentInvites", inviteId),
+    {
+      toUid: invite.toUid,
+      toName: invite.toName,
+      place: invite.place,
+      mins: invite.mins,
+      status: "sent",
+      updatedAt: serverTimestamp(),
+      fromName: invite.fromName,
+    },
+    { merge: true }
+  );
+
+  return inviteId;
 }

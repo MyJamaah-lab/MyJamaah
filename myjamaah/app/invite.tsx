@@ -57,6 +57,7 @@ if (!fromUid) {
       toName: name ?? "brother",
       place: placeLabel,
       mins: mins as number,
+      readAt: null,
     });
 
     Alert.alert("Firestore ✅", `Invite written to users/${toUid}/invites`);

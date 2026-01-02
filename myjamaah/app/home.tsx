@@ -232,7 +232,6 @@ if (rawLastSeen) {
 
     })
     .filter((u) => u.km <= radiusKm)
-    .filter((u) => u.minsAgo <= ACTIVE_WITHIN_MINS)
     .sort((a, b) => a.km - b.km);
 }, [coords, remoteUsers, radiusKm]);
 
@@ -251,12 +250,9 @@ if (rawLastSeen) {
 
       <Text style={{ color: "#fff", marginBottom: 10 }}>Local available: {String(available)}</Text>
 
-      <Pressable style={styles.smallBtn} onPress={() => router.push("/requests")}>
-        <Text style={styles.smallBtnText}>View Requests</Text>
+      <Pressable style={styles.smallBtn} onPress={() => router.push("/inbox")}>
+        <Text style={styles.smallBtnText}>Inbox</Text>
       </Pressable>
-<Pressable style={styles.smallBtn} onPress={() => router.push("/inbox")}>
-  <Text style={styles.smallBtnText}>Inbox</Text>
-</Pressable>
 <Pressable style={styles.smallBtn} onPress={() => router.push("/sent")}>
   <Text style={styles.smallBtnText}>Sent</Text>
 </Pressable>

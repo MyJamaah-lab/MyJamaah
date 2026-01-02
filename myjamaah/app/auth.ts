@@ -1,22 +1,11 @@
-import { onAuthStateChanged, signInAnonymously, User } from "firebase/auth";
+import { signInAnonymously, User } from "firebase/auth";
 import { auth } from "./firebase";
 
-export const ensureSignedIn = () =>
-  new Promise<User>((resolve, reject) => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      try {
-        if (user) {
-          unsubscribe();
-          resolve(user);
-          return;
-        }
+export async function ensureSignedIn(): Promise<User> {
+  // If we already have a user, reuse it (prevents new UID on fast refresh)
+  if (auth.currentUser) return auth.currentUser;
 
-        const cred = await signInAnonymously(auth);
-        unsubscribe();
-        resolve(cred.user);
-      } catch (err) {
-        unsubscribe();
-        reject(err);
-      }
-    });
-  });
+  // Otherwise sign in anonymously
+  const cred = await signInAnonymously(auth);
+  return cred.user;
+}

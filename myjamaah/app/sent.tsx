@@ -15,39 +15,36 @@ type SentRow = {
 
 export default function Sent() {
   const [sent, setSent] = useState<SentRow[]>([]);
-const [uidText, setUidText] = useState<string>("(loading uid...)");
+  
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    setUidText(uid ?? "(no uid)");
-    if (!uid) {
-      Alert.alert("Not signed in", "Open Home first so you are signed in.");
-      return;
-    }
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    Alert.alert("Not signed in", "Go to Home first so you are signed in.");
+    return;
+  }
 
-    const q = query(
-  collection(db, "users", uid, "sentInvites")
-);
+  const q = query(
+    collection(db, "users", uid, "sentInvites"),
+    orderBy("updatedAt", "desc")
+  );
 
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      setSent(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    },
+    (err) => Alert.alert("Sent listener error", String((err as any)?.message ?? err))
+  );
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setSent(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
-      },
-      (err) => Alert.alert("Sent error", String((err as any)?.message ?? err))
-    );
+  return () => unsub();
+}, []);
 
-    return () => unsub();
-  }, []);
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Sent Invites</Text>
       
-<Text style={{ color: "#d1fae5", marginBottom: 10 }}>
-  Viewing: users/{uidText}/sentInvites
-</Text>
       <FlatList
   data={sent}
   keyExtractor={(i) => i.id}
