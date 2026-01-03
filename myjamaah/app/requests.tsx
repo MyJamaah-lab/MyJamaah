@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, FlatList } from "react-native";
-import { getInvites, clearInvites, Invite, loadInvites, updateInviteStatus } from "./store";
+import { getInvites, clearInvites, Invite, loadInvites, updateInviteStatus } from "../lib/store";
+import { db } from "../lib/firebase";
+import { ensureSignedIn } from "../lib/auth";
 
-
+const [uid, setUid] = useState<string | null>(null);
 const placeLabel = (p: Invite["place"]) =>
   p === "work" ? "Workplace" : p === "mosque" ? "Nearest mosque" : "Outdoor spot";
 
@@ -16,7 +18,34 @@ export default function Requests() {
 
 
 useEffect(() => {
-  refresh();
+  let unsub: (() => void) | undefined;
+
+  (async () => {
+    try {
+      const user = await ensureSignedIn();
+      setUid(user.uid);
+
+      const q = query(
+        collection(db, "users", user.uid, "invites"),
+        orderBy("createdAt", "desc")
+      );
+
+      unsub = onSnapshot(q, (snap) => {
+        setInvites(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          }))
+        );
+      });
+    } catch (e: any) {
+      Alert.alert("Auth error", String(e?.message ?? e));
+    }
+  })();
+
+  return () => {
+    if (unsub) unsub();
+  };
 }, []);
 
 

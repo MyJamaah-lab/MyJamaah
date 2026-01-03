@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, FlatList, Alert } from "react-native";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
-
-import { ensureSignedIn } from "./auth";
-import { db } from "./firebase";
+import { ensureSignedIn } from "../lib/auth";
+import { db } from "../lib/firebase";
 import { onSnapshot } from "firebase/firestore";
-import { sendInviteToFirestore } from "./invitesApi";
-import { auth } from "./firebase";
+import { sendInviteToFirestore } from "../lib/invitesApi";
+import { auth } from "../lib/firebase";
 
 import {
   collection,

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, FlatList, Pressable, Alert } from "react-native";
-import { db } from "./firebase";
-import { ensureSignedIn } from "./auth";
+import { db } from "../lib/firebase";
+import { ensureSignedIn } from "../lib/auth";
 import {
   collection,
   doc,

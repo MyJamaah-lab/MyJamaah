@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, FlatList, Alert } from "react-native";
 import { onSnapshot, collection, query, orderBy } from "firebase/firestore";
-import { auth } from "./firebase";
-import { db } from "./firebase";
+import { auth } from "../lib/firebase";
+import { db } from "../lib/firebase";
+import { ensureSignedIn } from "../lib/auth";
 
 type SentRow = {
   id: string;
@@ -15,31 +16,38 @@ type SentRow = {
 
 export default function Sent() {
   const [sent, setSent] = useState<SentRow[]>([]);
-  
+  const [uid, setUid] = useState<string | null>(null);
 
   useEffect(() => {
-  const uid = auth.currentUser?.uid;
-  if (!uid) {
-    Alert.alert("Not signed in", "Go to Home first so you are signed in.");
-    return;
-  }
+  let unsub: (() => void) | undefined;
 
-  const q = query(
-    collection(db, "users", uid, "sentInvites"),
-    orderBy("updatedAt", "desc")
-  );
+  (async () => {
+    try {
+      const user = await ensureSignedIn();
+      setUid(user.uid);
 
-  const unsub = onSnapshot(
-    q,
-    (snap) => {
-      setSent(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
-    },
-    (err) => Alert.alert("Sent listener error", String((err as any)?.message ?? err))
-  );
+      const q = query(
+        collection(db, "users", user.uid, "invites"),
+        orderBy("createdAt", "desc")
+      );
 
-  return () => unsub();
+      unsub = onSnapshot(q, (snap) => {
+        setInvites(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          }))
+        );
+      });
+    } catch (e: any) {
+      Alert.alert("Auth error", String(e?.message ?? e));
+    }
+  })();
+
+  return () => {
+    if (unsub) unsub();
+  };
 }, []);
-
 
   return (
     <View style={styles.container}>

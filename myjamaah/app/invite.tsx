@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { addInvite, InvitePlace } from "./store";
-import { sendInviteToFirestore } from "./invitesApi";
-import { auth } from "./firebase";
+import { addInvite, InvitePlace } from "../lib/store";
+import { sendInviteToFirestore } from "../lib/invitesApi";
+import { auth } from "../lib/firebase";
 
 export default function Invite() {
   const router = useRouter();
