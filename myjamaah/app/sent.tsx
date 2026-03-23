@@ -27,12 +27,12 @@ export default function Sent() {
       setUid(user.uid);
 
       const q = query(
-        collection(db, "users", user.uid, "invites"),
-        orderBy("createdAt", "desc")
+        collection(db, "users", user.uid, "sentInvites"), // ✅ Fixed: was "invites"
+        orderBy("updatedAt", "desc") // ✅ Fixed: was "createdAt"
       );
 
       unsub = onSnapshot(q, (snap) => {
-        setInvites(
+        setSent( // ✅ Fixed: was "setInvites"
           snap.docs.map((d) => ({
             id: d.id,
             ...(d.data() as any),
