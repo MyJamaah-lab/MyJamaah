@@ -32,7 +32,7 @@ export default function Sent() {
 
         unsub = onSnapshot(q, (snap: QuerySnapshot<DocumentData>) => {
           setSent(
-            snap.docs.map((d) => ({
+            snap.docs.map((d: any) => ({
               id: d.id,
               ...(d.data() as Omit<SentRow, 'id'>),
             }))
