@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, FlatList, Alert } from "react-native";
+import { View, Text, Pressable, StyleSheet, FlatList, Alert, Modal } from "react-native";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { ensureSignedIn } from "../lib/auth";
@@ -29,6 +29,7 @@ type FireUser = {
   gender?: string;
   lastSeenAt?: any;
   LastSeenAt?: any;
+  prayingNow?: string;
 };
 
 type NearbyRow = {
@@ -39,6 +40,8 @@ type NearbyRow = {
   lastSeenText: string;
   minsAgo: number;
 };
+
+const PRAYER_NAMES = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
 
 export default function Home() {
   const router = useRouter();
@@ -53,6 +56,11 @@ export default function Home() {
 
   const [prayerTimes, setPrayerTimes] = useState<PrayerTimes | null>(null);
   const [loadingPrayer, setLoadingPrayer] = useState(false);
+
+  // ---- "I'm Praying Now" state ----
+  const [showPrayerPicker, setShowPrayerPicker] = useState(false);
+  const [prayingNow, setPrayingNow] = useState<string | null>(null);
+  const [broadcasting, setBroadcasting] = useState(false);
 
   // ---- Firestore helpers ----
 
@@ -111,6 +119,64 @@ export default function Home() {
     setLoadingPrayer(false);
   };
 
+  // ---- Broadcast "I'm Praying Now" ----
+  const startBroadcastingPrayer = async (prayerName: string) => {
+    setShowPrayerPicker(false);
+
+    if (!uid) {
+      Alert.alert("Not signed in yet", "Please wait a moment and try again.");
+      return;
+    }
+
+    try {
+      let liveCoords = coords;
+
+      // Get a fresh location if we don't have one yet
+      if (!liveCoords) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Location needed", "We need your location to broadcast to nearby brothers.");
+          return;
+        }
+        const pos = await Location.getCurrentPositionAsync({});
+        liveCoords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        setCoords(liveCoords);
+      }
+
+      const round = (n: number) => Math.round(n * 200) / 200;
+
+      await updateDoc(doc(db, "users", uid), {
+        available: true,
+        prayingNow: prayerName,
+        lat: round(liveCoords.latitude),
+        lng: round(liveCoords.longitude),
+        lastSeenAt: serverTimestamp(),
+      });
+
+      setAvailable(true);
+      setPrayingNow(prayerName);
+      setBroadcasting(true);
+    } catch (e: any) {
+      Alert.alert("Error", String(e?.message ?? e));
+    }
+  };
+
+  const stopBroadcastingPrayer = async () => {
+    if (!uid) return;
+    try {
+      await updateDoc(doc(db, "users", uid), {
+        available: false,
+        prayingNow: null,
+        lastSeenAt: serverTimestamp(),
+      });
+      setAvailable(false);
+      setPrayingNow(null);
+      setBroadcasting(false);
+    } catch (e: any) {
+      Alert.alert("Error", String(e?.message ?? e));
+    }
+  };
+
   // ---- Auth on mount ----
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -144,13 +210,6 @@ export default function Home() {
     })();
   }, []);
 
-  // ---- Whenever availability changes, sync to Firestore ----
-  useEffect(() => {
-    if (!uid) return;
-    writeAvailability(available);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [available, uid]);
-
   // ---- Location ----
   const getLocation = async () => {
     try {
@@ -164,7 +223,6 @@ export default function Home() {
       const nextCoords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
       setCoords(nextCoords);
 
-      // Refresh prayer times too when location updates
       loadPrayerTimes(nextCoords.latitude, nextCoords.longitude);
 
       if (uid) {
@@ -304,11 +362,44 @@ export default function Home() {
         Your status: {available ? "Available to pray" : "Not available"}
       </Text>
 
-      <Pressable style={[styles.toggle, available && styles.toggleOn]} onPress={() => setAvailable((v) => !v)}>
-        <Text style={styles.toggleText}>
-          {available ? "Set as unavailable" : "I'm available to pray now"}
-        </Text>
-      </Pressable>
+      {/* Big "I'm Praying Now" Button */}
+      {broadcasting ? (
+        <Pressable style={styles.prayingNowActiveBtn} onPress={stopBroadcastingPrayer}>
+          <Text style={styles.prayingNowText}>🕌 Praying {prayingNow}</Text>
+          <Text style={styles.prayingNowSubtext}>Tap to stop broadcasting</Text>
+        </Pressable>
+      ) : (
+        <Pressable style={styles.prayingNowBtn} onPress={() => setShowPrayerPicker(true)}>
+          <Text style={styles.prayingNowText}>🕌 I'm Praying Now</Text>
+          <Text style={styles.prayingNowSubtext}>Broadcast to nearby brothers</Text>
+        </Pressable>
+      )}
+
+      {/* Prayer Picker Modal */}
+      <Modal
+        visible={showPrayerPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPrayerPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Which prayer?</Text>
+            {PRAYER_NAMES.map((name) => (
+              <Pressable
+                key={name}
+                style={styles.modalOption}
+                onPress={() => startBroadcastingPrayer(name)}
+              >
+                <Text style={styles.modalOptionText}>{name}</Text>
+              </Pressable>
+            ))}
+            <Pressable style={styles.modalCancel} onPress={() => setShowPrayerPicker(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Pressable
         style={styles.locationBtn}
@@ -464,6 +555,82 @@ const styles = StyleSheet.create({
     backgroundColor: "#083b2f",
   },
   smallBtnText: { color: "#a7f3d0", fontWeight: "900" },
+
+  prayingNowBtn: {
+    backgroundColor: "#16a34a",
+    paddingVertical: 20,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    marginBottom: 16,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  prayingNowActiveBtn: {
+    backgroundColor: "#065f46",
+    paddingVertical: 20,
+    paddingHorizontal: 24,
+    borderRadius: 16,
+    marginBottom: 16,
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#34d399",
+  },
+  prayingNowText: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  prayingNowSubtext: {
+    color: "#d1fae5",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalBox: {
+    backgroundColor: "#083b2f",
+    borderRadius: 16,
+    padding: 20,
+    width: "80%",
+  },
+  modalTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  modalOption: {
+    backgroundColor: "#065f46",
+    borderRadius: 12,
+    paddingVertical: 14,
+    marginBottom: 10,
+    alignItems: "center",
+  },
+  modalOptionText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  modalCancel: {
+    paddingVertical: 10,
+    alignItems: "center",
+    marginTop: 4,
+  },
+  modalCancelText: {
+    color: "#a7f3d0",
+    fontWeight: "700",
+  },
 
   toggle: {
     backgroundColor: "#16a34a",
